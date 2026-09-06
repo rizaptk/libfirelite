@@ -2,6 +2,10 @@
 
 **Prebuilt FireLite library + SDK gateways + CLI + fair benchmarks (preview).**
 
+> **License:** closed-source **evaluation license** — see [`LICENSE`](LICENSE).
+> Evaluation, benchmarking and prototyping allowed; redistribution and production
+> use require permission. Open-sourcing the engine is under consideration.
+
 FireLite is an embedded, Firestore-style document database written in Rust.
 It stores typed JSON-like documents in binary form, runs **fully in-process** like SQLite
 (no server, no daemon, no network config), and exposes a **flat C ABI** so it can be embedded in
@@ -200,6 +204,8 @@ are all taken from the same engine revision.
 
 ## License
 
-Preview license — **all rights reserved**. You may use the prebuilt binaries and SDK gateways in this
-repo to evaluate and prototype with FireLite. Redistribution of the binaries, and any use of the
-FireLite name beyond attribution, requires permission. Open-source licensing is under consideration.
+This repository is distributed under the [libfirelite Binary Evaluation License](LICENSE) —
+**all rights reserved**. You may use the prebuilt binaries, headers and SDK gateways to
+evaluate, benchmark (disclose version and settings when publishing results) and prototype
+with FireLite. Redistribution, production deployment and any commercial use beyond evaluation
+require a separate agreement. Open-source licensing is under consideration.

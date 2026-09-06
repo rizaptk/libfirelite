@@ -1,0 +1,34 @@
+libfirelite Binary Evaluation License v1.0
+
+Copyright (c) 2026 AbcDev Team. All rights reserved.
+
+This license governs the "Software": the prebuilt FireLite libraries,
+headers, SDK gateways, CLI and benchmark executables distributed through
+the libfirelite repository and its Release assets. The FireLite engine
+source code is not included.
+
+1. Grant. The licensor grants you a non-exclusive, non-transferable,
+   royalty-free license to download and use the Software solely for:
+   (a) evaluation, (b) benchmarking, and (c) prototyping.
+
+2. Benchmark publication. You may publish benchmark results obtained
+   with the Software, provided you disclose the library version and
+   the benchmark settings (durability mode, document count, thread
+   count) so results remain comparable.
+
+3. Restrictions. You may not: (a) redistribute or sublicense the
+   Software, in whole or in part; (b) use the Software in production
+   systems or for commercial purposes beyond evaluation without a
+   separate written agreement; (c) remove or alter any copyright or
+   license notices; (d) reverse-engineer the binaries except to the
+   extent permitted by applicable law.
+
+4. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+   ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+   MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT
+   SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+5. Termination. This license terminates automatically if you breach
+   any of its terms. It remains in effect until superseded by a future
+   open-source license for the Software, if any.
