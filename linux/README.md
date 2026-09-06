@@ -13,7 +13,7 @@ sqlite_bench
 Extract into this directory:
 
 ```bash
-tar xzf libfirelite-0.7.7-linux.tar.gz -C /path/to/libfirelite/linux
+tar xzf libfirelite-0.7.9-linux.tar.gz -C /path/to/libfirelite/linux
 chmod +x firelite-cli benchmark sqlite_bench  # required if the tarball lost exec bits
 ```
 

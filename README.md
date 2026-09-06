@@ -11,7 +11,7 @@ It stores typed JSON-like documents in binary form, runs **fully in-process** li
 (no server, no daemon, no network config), and exposes a **flat C ABI** so it can be embedded in
 apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus, and more.
 
-> **Status of this repo:** binary/SDK **preview** of FireLite **v0.7.7**.
+> **Status of this repo:** binary/SDK **preview** of FireLite **v0.7.9**.
 > It exists to share and try the library. Open-sourcing the engine itself is still under consideration —
 > the Rust source is **not** included here. See [License](#license).
 
@@ -38,6 +38,7 @@ apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus
 | `include/firelite.h` | C ABI header (all languages build against this) |
 | `windows/` | Per-version zip from **Releases** (`firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `benchmark.exe`, `sqlite_bench.exe`) — see `windows/README.md` |
 | `linux/` | Per-version tarball from **Releases** (`libfirelite.so`, `firelite-cli`, `benchmark`, `sqlite_bench`) — see `linux/README.md` |
+| `android/` | Per-version tarball from **Releases** (`jniLibs/arm64-v8a/libfirelite.so`) — see `android/README.md` |
 | `macos/` | Library-only (`libfirelite.dylib`, not yet published) — no CLI/benchmark binaries (no macOS build access) — see `macos/README.md` |
 | `go/` | Go cgo gateway (`firelite.go`, `firelite_c.h`, `go.mod`) |
 | `js/` | JS/TS SDK over C-FFI (`client.ts`, `native.ts`, koffi for Node, `bun:ffi` for Bun). Tauri gateway excluded — it needs the engine source |
@@ -50,10 +51,12 @@ Binaries are published as versioned **Release assets** and never committed to gi
 
 | Asset | Contents |
 |---|---|
-| `libfirelite-0.7.7-windows.zip` | `firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `benchmark.exe`, `sqlite_bench.exe` |
-| `libfirelite-0.7.7-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `benchmark`, `sqlite_bench` |
+| `libfirelite-0.7.9-windows.zip` | `firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `benchmark.exe`, `sqlite_bench.exe` |
+| `libfirelite-0.7.9-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `benchmark`, `sqlite_bench` |
+| `libfirelite-0.7.9-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
 
-Extract the archive for your platform into the matching directory (`windows/`, `linux/`).
+Extract the archive for your platform into the matching directory (`windows/`, `linux/`,
+or your app's `jniLibs/` for Android). Prior releases keep their own versioned assets.
 
 ## Quick use
 
@@ -126,6 +129,45 @@ DB := TFireLite.Create('./data.firelite');
 Col.Doc('u1').SetDoc(TFLDocument.Create.InsertStr('name', 'alice'));
 ```
 
+## Net Sync discovery (v0.7.8+)
+
+LAN peer discovery is developer-chosen per syncer, symmetric across platforms:
+
+| Mode | Value | Transport | Default on |
+|---|---|---|---|
+| mDNS | `0` | multicast browse/register | desktop |
+| Broadcast | `1` | UDP beacons on `255.255.255.255:5354`, no `MulticastLock` | mobile (Android) |
+| Both | `2` | mDNS + broadcast | opt-in (mixed groups) |
+
+Beacons carry `{id, room_hash, tcp_port, known_peers}`; receivers use the UDP
+source IP (multi-interface safe) and merge gossiped peers, so finding one peer
+bootstraps the group. Defaults preserve pre-0.7.8 behavior with zero config.
+**Mixed-group recipe:** whoever hears, dials — but a default desktop never hears
+broadcast-only mobile peers, so opt the desktop side into `Both` once.
+
+```bash
+# CLI: desktop joining mobile peers
+firelite-cli --db ./demo.db serve --port 7070 --node-id node-1 --key my-room-key --discovery both
+```
+
+```c
+fl_net_syncer_set_discovery(syncer, 2);   // takes effect at the next start()
+```
+
+```go
+syncer.SetDiscoveryMode(firelite.DiscoveryBoth)  // DiscoveryMdns / DiscoveryBroadcast / DiscoveryBoth
+```
+
+```ts
+await syncer.setDiscoveryMode(2);  // 0 | 1 | 2
+```
+
+```pascal
+Syncer.SetDiscoveryMode(dmBoth);  // dmMdns / dmBroadcast / dmBoth (default dmMdns)
+```
+
+See `android/README.md` for Android specifics (permissions, Doze, expiry).
+
 ## Benchmark
 
 `bench/benchmark.cpp` is the **official harness**: it drives the engine only through the public
@@ -194,12 +236,13 @@ Linux/macOS equivalents use `-L../linux` / `-L../macos` and `-lfirelite`
 
 - **Windows** — `libfirelite-<version>-windows.zip` in **Releases**; `windows/` in git holds only `README.md`.
 - **Linux** — `libfirelite-<version>-linux.tar.gz` in **Releases**; `linux/` in git holds only `README.md`.
+- **Android** — `libfirelite-<version>-android.tar.gz` in **Releases** (`jniLibs/arm64-v8a`); see `android/README.md`.
 - **macOS** — library-only distribution (`libfirelite.dylib` + `include/firelite.h`, not yet published);
   no CLI/benchmark binaries (no macOS build access). JS/Go/Pascal gateways link against the dylib.
 
 ## Version
 
-This preview tracks engine **v0.7.7** (`VERSION`). Header, libraries, gateways and benchmarks
+This preview tracks engine **v0.7.9** (`VERSION`). Header, libraries, gateways and benchmarks
 are all taken from the same engine revision.
 
 ## License
