@@ -209,3 +209,6 @@ This repository is distributed under the [libfirelite Binary Evaluation License]
 evaluate, benchmark (disclose version and settings when publishing results) and prototype
 with FireLite. Redistribution, production deployment and any commercial use beyond evaluation
 require a separate agreement. Open-source licensing is under consideration.
+
+Third-party attributions for the statically linked open-source dependencies:
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (all permissive licenses; no GPL/LGPL/AGPL code linked).
