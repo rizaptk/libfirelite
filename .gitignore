@@ -1,0 +1,26 @@
+# benchmark scratch dirs + local databases (never commit test output)
+bench_data_*/
+sqlite_bench_data/
+*.db
+*.firelite/
+.firelite-example/
+
+# Prebuilt binaries are distributed via Releases, never committed
+*.dll
+*.lib
+*.exe
+*.so
+*.dylib
+*.a
+*.ppu
+*.o
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# JS
+js/node_modules/
+js/dist/
