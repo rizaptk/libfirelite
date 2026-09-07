@@ -11,7 +11,8 @@ It stores typed JSON-like documents in binary form, runs **fully in-process** li
 (no server, no daemon, no network config), and exposes a **flat C ABI** so it can be embedded in
 apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus, and more.
 
-> **Status of this repo:** binary/SDK **preview** of FireLite **v0.7.9**.
+> **Status of this repo:** binary/SDK **preview** of FireLite **v0.7.10** (engine core
+> unchanged since v0.7.9 — this cut only fixes and extends the Pascal SDK).
 > It exists to share and try the library. Open-sourcing the engine itself is still under consideration —
 > the Rust source is **not** included here. See [License](#license).
 
@@ -42,7 +43,7 @@ apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus
 | `macos/` | Library-only (`libfirelite.dylib`, not yet published) — no CLI/benchmark binaries (no macOS build access) — see `macos/README.md` |
 | `go/` | Go cgo gateway (`firelite.go`, `firelite_c.h`, `go.mod`) |
 | `js/` | JS/TS SDK over C-FFI (`client.ts`, `native.ts`, koffi for Node, `bun:ffi` for Bun). Tauri gateway excluded — it needs the engine source |
-| `pascal/` | Lazarus/FPC wrapper (`FireLiteRaw.pas`, `FireLite.pas`, `FireLiteComponent.pas`, package `firelite.lpk`) |
+| `pascal/` | Lazarus/FPC wrapper (`FireLiteRaw.pas`, `FireLite.pas`, `FireLiteComponent.pas`; packages `FireLitePkg.lpk` runtime + `FireLiteDesign.lpk` designtime) |
 | `bench/` | `benchmark.cpp` (official FireLite harness) + `sqlite_bench.cpp` (fair SQLite mirror) |
 
 ## Releases
@@ -57,6 +58,7 @@ Binaries are published as versioned **Release assets** and never committed to gi
 
 Extract the archive for your platform into the matching directory (`windows/`, `linux/`,
 or your app's `jniLibs/` for Android). Prior releases keep their own versioned assets.
+v0.7.10 ships no new binaries (Pascal SDK only) — reuse the v0.7.9 assets.
 
 ## Quick use
 
@@ -121,13 +123,24 @@ await db.collection("users").doc("alice").set({ name: "Alice", age: 30 });
 
 ### Pascal / Lazarus
 
-Add `pascal/` to the unit path (`-Fu`), or install `pascal/firelite.lpk`
-(`Package > Open Package File (.lpk)` → Compile → Install), then:
+Add `pascal/` to the unit path (`-Fu`), or install the packages — runtime and
+designtime are split (a single mixed package will not install):
+
+- `pascal/FireLitePkg.lpk` — **runtime**: reference it from Project Inspector
+  to use the SDK from code. Never install this one.
+- `pascal/FireLiteDesign.lpk` — **designtime**: `Package > Open Package File (.lpk)`
+  → Compile → **Install**. A **FireLite** tab with `TFireLiteComponent` (palette
+  icon included) appears on the component palette.
 
 ```pascal
 DB := TFireLite.Create('./data.firelite');
 Col.Doc('u1').SetDoc(TFLDocument.Create.InsertStr('name', 'alice'));
 ```
+
+Sync on the component is opt-in: `NetSyncEnabled` / `CloudSyncEnabled` default to
+`False` and the remaining sync properties (`NetSyncName`, `NetSyncRoomKey`,
+`NetSyncPort`, `NetSyncDiscovery`, `CloudSync*`) are inert until enabled —
+`StartNetSync` / `StartCloudSync` raise otherwise.
 
 ## Net Sync discovery (v0.7.8+)
 
@@ -242,8 +255,8 @@ Linux/macOS equivalents use `-L../linux` / `-L../macos` and `-lfirelite`
 
 ## Version
 
-This preview tracks engine **v0.7.9** (`VERSION`). Header, libraries, gateways and benchmarks
-are all taken from the same engine revision.
+This preview tracks engine **v0.7.10** (`VERSION`). Header, libraries, gateways and benchmarks
+are all taken from the same engine revision (core unchanged since v0.7.9).
 
 ## License
 
