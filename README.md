@@ -11,7 +11,7 @@ It stores typed JSON-like documents in binary form, runs **fully in-process** li
 (no server, no daemon, no network config), and exposes a **flat C ABI** so it can be embedded in
 apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus, and more.
 
-> **Status of this repo:** binary/SDK **preview** of FireLite **v0.7.13**.
+> **Status of this repo:** binary/SDK **preview** of FireLite **v0.8.0**.
 > It exists to share and try the library. Open-sourcing the engine itself is still under consideration —
 > the Rust source is **not** included here. See [License](#license).
 
@@ -51,9 +51,9 @@ Binaries are published as versioned **Release assets** and never committed to gi
 
 | Asset | Contents |
 |---|---|
-| `libfirelite-0.7.13-windows.zip` | `firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `benchmark.exe`, `sqlite_bench.exe` |
-| `libfirelite-0.7.13-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `benchmark`, `sqlite_bench` (binary carried over from v0.7.9 — source unchanged) |
-| `libfirelite-0.7.13-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
+| `libfirelite-0.8.0-windows.zip` | `firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `firelite-cloudserver.exe`, `benchmark.exe`, `sqlite_bench.exe` |
+| `libfirelite-0.8.0-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `firelite-cloudserver`, `benchmark`, `sqlite_bench` (binary carried over — source unchanged) |
+| `libfirelite-0.8.0-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
 
 Extract the archive for your platform into the matching directory (`windows/`, `linux/`,
 or your app's `jniLibs/` for Android). Prior releases keep their own versioned assets.
@@ -195,6 +195,61 @@ See `android/README.md` for Android specifics (permissions, Doze, expiry).
   so the `fl_net_syncer_*` / `fl_cloud_sync_*` symbols are always present.
   (Older cuts required `--features net-sync,cloud-sync`.)
 
+## firelite-cloudserver (managed sync hub + admin console) — v0.8.0+
+
+Standalone console binary for operators who outgrow `firelite-cli serve`: a
+room-agnostic sync hub plus an admin web console (embedded HTML + SSE), one
+process, two ports. Shipped in the Windows zip and Linux tarball as
+`firelite-cloudserver[.exe]`; not built for Android/macOS.
+
+```bash
+firelite-cloudserver --db-path ./cloud.db --admin-bind 127.0.0.1:8081 --sync-bind 0.0.0.0:8080
+```
+
+Configuration layers (later wins): compiled defaults < `./firelite-cloud.toml`
+(auto-loaded when present) < `FL_*` env (`FL_DB_PATH`, `FL_ADMIN_BIND`,
+`FL_SYNC_BIND`, `FL_LOG_LEVEL`, `FL_SECURE_COOKIES`, `FL_SERVER_ID`,
+`FL_SYNC_TOKEN`, `FL_TLS_CERT`, `FL_TLS_KEY`) < CLI flags.
+
+```toml
+db_path = "/var/lib/firelite-cloud/db"
+admin_bind = "127.0.0.1:8081"
+sync_bind = "0.0.0.0:8080"
+log_level = "info"
+```
+
+- **First run:** open the console — with no admin account present only the setup
+  wizard is reachable. Create the initial administrator; the wizard disables
+  itself permanently. Roles: `viewer` (read), `operator` (read + write data),
+  `admin` (everything incl. users, groups, maintenance).
+- **Groups:** rooms accept anonymous peers unless you create a **group** for the
+  room name: `registered` mode issues an API key (shown once, only its hash
+  persists) presented at handshake; an optional member list pins allowed
+  `client_id`s. Absent groups stay open, so existing deployments keep working.
+- **Topology advice:** point one (two for redundancy) always-on peer per site at
+  the hub; let the rest mesh peer-to-peer locally. Hubs converge through the
+  server; LAN traffic never leaves the site.
+- **TLS and services:** `--tls-cert` + `--tls-key` must come as a pair
+  (fail-closed); session cookies flip `Secure` automatically. Linux: hardened
+  systemd unit (upstream `contrib/`); Windows: `--install-service` (absolute
+  `--db-path`, auto-start at boot) / `--uninstall-service`. Never bind the
+  console to `0.0.0.0` without TLS — the server logs a loud warning.
+
+Point embedded clients at the hub as with CLI cloud-server mode
+(`serve --server ws://hub:8080 ...` with matching room, key and token).
+
+### Encrypted sync posture (v0.7.14+, fail-closed)
+
+Encryption at rest and sync-time plaintext are **independent**: tailers emit
+decoded documents, so an encrypted collection replicates as **plaintext on the
+wire** unless refused — there is deliberately no silent path. Handshakes carry
+key fingerprints (mesh `SyncCaps`, cloud `enc_fp`/`enc_cols`); senders skip,
+receivers drop and relays filter per recipient, all with throttled warnings.
+Put the same `encryption_key` on every node sharing the room; expect
+`[sync-guard]` warnings for keyless/wrong-key/old peers. No override flag by
+design. Not protected: cloud operator visibility, passive LAN observers (no E2E
+yet), impersonators replaying fingerprints (assertions, not proofs).
+
 ## Benchmark
 
 `bench/benchmark.cpp` is the **official harness**: it drives the engine only through the public
@@ -261,15 +316,15 @@ Linux/macOS equivalents use `-L../linux` / `-L../macos` and `-lfirelite`
 
 ## Platform notes
 
-- **Windows** — `libfirelite-<version>-windows.zip` in **Releases**; `windows/` in git holds only `README.md`.
-- **Linux** — `libfirelite-<version>-linux.tar.gz` in **Releases**; `linux/` in git holds only `README.md`.
-- **Android** — `libfirelite-<version>-android.tar.gz` in **Releases** (`jniLibs/arm64-v8a`); see `android/README.md`.
+- **Windows** — `libfirelite-<version>-windows.zip` in **Releases** (engine lib + CLI + cloudserver + benchmarks); `windows/` in git holds only `README.md`.
+- **Linux** — `libfirelite-<version>-linux.tar.gz` in **Releases** (engine lib + CLI + cloudserver + benchmarks); `linux/` in git holds only `README.md`.
+- **Android** — `libfirelite-<version>-android.tar.gz` in **Releases** (`jniLibs/arm64-v8a`); engine library only, no server/CLI binaries; see `android/README.md`.
 - **macOS** — library-only distribution (`libfirelite.dylib` + `include/firelite.h`, not yet published);
   no CLI/benchmark binaries (no macOS build access). JS/Go/Pascal gateways link against the dylib.
 
 ## Version
 
-This preview tracks engine **v0.7.13** (`VERSION`). Header, libraries, gateways and benchmarks
+This preview tracks engine **v0.8.0** (`VERSION`). Header, libraries, gateways and benchmarks
 are all taken from the same engine revision.
 
 ## License
