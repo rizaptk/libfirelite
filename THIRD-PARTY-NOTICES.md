@@ -1,7 +1,7 @@
 # Third-party notices
 
 The prebuilt libfirelite binaries statically link the following open-source
-Rust crates (engine v0.7.7 + CLI v0.2.1 dependency closure, runtime-linked set).
+Rust crates (engine v0.7.13 + CLI v0.2.1 dependency closure, runtime-linked set).
 All are under permissive licenses (MIT / Apache-2.0 / BSD / ISC / Unlicense /
 CC0 / Unicode-3.0 / BSL-1.0). No GPL / LGPL / AGPL / MPL-linked code is included.
 Full license texts: https://spdx.org/licenses/ and https://crates.io/crates/<name>.

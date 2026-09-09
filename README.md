@@ -11,8 +11,7 @@ It stores typed JSON-like documents in binary form, runs **fully in-process** li
 (no server, no daemon, no network config), and exposes a **flat C ABI** so it can be embedded in
 apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus, and more.
 
-> **Status of this repo:** binary/SDK **preview** of FireLite **v0.7.10** (engine core
-> unchanged since v0.7.9 — this cut only fixes and extends the Pascal SDK).
+> **Status of this repo:** binary/SDK **preview** of FireLite **v0.7.13**.
 > It exists to share and try the library. Open-sourcing the engine itself is still under consideration —
 > the Rust source is **not** included here. See [License](#license).
 
@@ -28,9 +27,9 @@ apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus
 - **Zero-copy projection** — queries cherry-pick fields from memory-mapped binary slices;
   deferred blob fetching (`defer_blobs`) keeps list views fast.
 - **Optional sync** — **Net Sync** (LAN mesh, mDNS) and **Cloud Sync**
-  (central WebSocket hub + offline-first clients). Release libraries are built with
-  `net-sync` and `cloud-sync` enabled, so the `fl_net_syncer_*` / `fl_cloud_sync_*`
-  C ABI symbols are always present (build contract: `cargo build --release --features net-sync,cloud-sync`).
+  (central WebSocket hub + offline-first clients). Since v0.7.13 sync is part of the
+  default build, so the `fl_net_syncer_*` / `fl_cloud_sync_*` C ABI symbols are
+  always present in release libraries (build contract: plain `cargo build --release`).
 
 ## Contents
 
@@ -52,13 +51,12 @@ Binaries are published as versioned **Release assets** and never committed to gi
 
 | Asset | Contents |
 |---|---|
-| `libfirelite-0.7.9-windows.zip` | `firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `benchmark.exe`, `sqlite_bench.exe` |
-| `libfirelite-0.7.9-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `benchmark`, `sqlite_bench` |
-| `libfirelite-0.7.9-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
+| `libfirelite-0.7.13-windows.zip` | `firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `benchmark.exe`, `sqlite_bench.exe` |
+| `libfirelite-0.7.13-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `benchmark`, `sqlite_bench` (binary carried over from v0.7.9 — source unchanged) |
+| `libfirelite-0.7.13-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
 
 Extract the archive for your platform into the matching directory (`windows/`, `linux/`,
 or your app's `jniLibs/` for Android). Prior releases keep their own versioned assets.
-v0.7.10 ships no new binaries (Pascal SDK only) — reuse the v0.7.9 assets.
 
 ## Quick use
 
@@ -181,6 +179,22 @@ Syncer.SetDiscoveryMode(dmBoth);  // dmMdns / dmBroadcast / dmBoth (default dmMd
 
 See `android/README.md` for Android specifics (permissions, Doze, expiry).
 
+## Engine notes (v0.7.11–v0.7.13)
+
+- **WAL history compaction (v0.7.11).** `compact()` now rewrites the WAL snapshot
+  whenever stale history dominates (past the compaction threshold and over ~3x
+  live inlined bytes), even with zero segments to merge — previously small-but-hot
+  collections accumulated unreclaimable WAL history. The same bounded rewrite runs
+  once at open (best-effort). Existing `compact` CLI/FFI paths reclaim automatically.
+- **`wal_reserve_bytes` defaults to 0 (v0.7.12).** A/B measured no throughput delta
+  on fsync-bound workloads, so no phantom size by default (matters on mobile
+  storage). Opt back in via `fl_config_set_wal_reserve_bytes` if a long-soak test
+  ever shows fragmentation-driven fsync decay.
+- **Sync in default features (v0.7.13).** Release libraries are built with plain
+  `cargo build --release` — `net-sync` and `cloud-sync` are now default features,
+  so the `fl_net_syncer_*` / `fl_cloud_sync_*` symbols are always present.
+  (Older cuts required `--features net-sync,cloud-sync`.)
+
 ## Benchmark
 
 `bench/benchmark.cpp` is the **official harness**: it drives the engine only through the public
@@ -255,8 +269,8 @@ Linux/macOS equivalents use `-L../linux` / `-L../macos` and `-lfirelite`
 
 ## Version
 
-This preview tracks engine **v0.7.10** (`VERSION`). Header, libraries, gateways and benchmarks
-are all taken from the same engine revision (core unchanged since v0.7.9).
+This preview tracks engine **v0.7.13** (`VERSION`). Header, libraries, gateways and benchmarks
+are all taken from the same engine revision.
 
 ## License
 
