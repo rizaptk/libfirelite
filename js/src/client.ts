@@ -217,6 +217,109 @@ export class DocumentSnapshot {
   }
 }
 
+/**
+ * One raw page: pinned storage bytes per row (v0.8.3+). Decode nothing
+ * up front — resolve() only rows you touch, page with
+ * Query.startAfterRaw() (no decode at all). Free when done; rows die
+ * with the page.
+ */
+export class RawQuerySnapshot {
+  private freed = false;
+
+  constructor(
+    private readonly client: FireLiteClient,
+    private readonly collection: string,
+    private readonly handle: unknown
+  ) { }
+
+  get count(): number {
+    return this.client.nativeBindings().rawResultCount(this.handle);
+  }
+
+  /** Decode + inflate one row. Prefer resolving only rows you touch. */
+  async resolve(index: number): Promise<FireLiteDocData | undefined> {
+    const native = this.client.nativeBindings();
+    const doc = native.rawDocToDoc(this.client.engineHandle(), this.rawHandleAt(index), this.collection);
+    if (!doc) return undefined;
+    try {
+      return parseDocJson(native.docToJson(doc));
+    } finally {
+      native.docFree(doc);
+    }
+  }
+
+  /** Borrowed native raw handle. Valid until free(). Internal. */
+  rawHandleAt(index: number): unknown {
+    return this.client.nativeBindings().rawResultGet(this.handle, index);
+  }
+
+  free(): void {
+    if (!this.freed) {
+      this.freed = true;
+      this.client.nativeBindings().rawResultFree(this.handle);
+    }
+  }
+}
+
+/**
+ * One borrowed row (v0.8.11+): lazy numeric/bool pulls with no decode
+ * and no JSON. Strings stay on resolve() (no backend memory reads).
+ * Free when done.
+ */
+export class ViewDocSnapshot {
+  private freed = false;
+
+  constructor(
+    private readonly client: FireLiteClient,
+    private readonly collection: string,
+    private readonly docId: string,
+    private readonly handle: unknown
+  ) { }
+
+  get id(): string {
+    return this.docId;
+  }
+
+  get fieldCount(): number {
+    return this.client.nativeBindings().viewFieldCount(this.handle);
+  }
+
+  has(field: string): boolean {
+    return this.client.nativeBindings().viewHasField(this.handle, field);
+  }
+
+  getInt(field: string): number | bigint | null {
+    return this.client.nativeBindings().viewGetInt(this.handle, field);
+  }
+
+  getFloat(field: string): number | null {
+    return this.client.nativeBindings().viewGetFloat(this.handle, field);
+  }
+
+  getBool(field: string): boolean | null {
+    return this.client.nativeBindings().viewGetBool(this.handle, field);
+  }
+
+  /** Full decode + inflate. Prefer pulls for sparse reads. */
+  async resolve(): Promise<FireLiteDocData | undefined> {
+    const native = this.client.nativeBindings();
+    const doc = native.viewToDoc(this.handle, this.docId);
+    if (!doc) return undefined;
+    try {
+      return parseDocJson(native.docToJson(doc));
+    } finally {
+      native.docFree(doc);
+    }
+  }
+
+  free(): void {
+    if (!this.freed) {
+      this.freed = true;
+      this.client.nativeBindings().viewFree(this.handle);
+    }
+  }
+}
+
 export class FireLiteClient {
   private readonly native: NativeBindings;
   private readonly engine: unknown;
@@ -439,6 +542,17 @@ export class FireLiteClient {
     // Keep 'doc' handle for startAfter. Native memory management should be handled
     // by engineFree or manual free if the user keeps thousands of snapshots.
     return new DocumentSnapshot(docId, true, parseDocJson(json), doc);
+  }
+
+  /**
+   * Borrowed point view (v0.8.11+): lazy numeric/bool pulls with no decode
+   * and no JSON. Returns null when missing. Free the snapshot when done.
+   */
+  async viewDoc(collection: string, docId: string): Promise<ViewDocSnapshot | null> {
+    this.assertOpen();
+    const view = this.native.viewGet(this.engine, collection, docId);
+    if (!view) return null;
+    return new ViewDocSnapshot(this, collection, docId, view);
   }
 
   async delete(collection: string, docId: string): Promise<void> {
@@ -664,6 +778,7 @@ export class Query {
   private _startAtSnapshot?: DocumentSnapshot;
   private _endAtSnapshot?: DocumentSnapshot;
   private _endBeforeSnapshot?: DocumentSnapshot;
+  private _startAfterRawAnchor?: { snap: RawQuerySnapshot; index: number };
   private readonly filters: QueryConstraint[] = [];
   private readonly orFilters: QueryConstraint[] = [];
   private order?: QueryOrder;
@@ -686,6 +801,12 @@ private deferBlobsDef = false;
 
   startAfter(snapshot: DocumentSnapshot): Query {
     this._startAfterSnapshot = snapshot;
+    return this;
+  }
+
+  /** Keyset anchor from a raw row — no decode. Prefer one anchor kind. */
+  startAfterRaw(snap: RawQuerySnapshot, index: number): Query {
+    this._startAfterRawAnchor = { snap, index };
     return this;
   }
 
@@ -810,6 +931,9 @@ return this;
       if (this._startAfterSnapshot?._nativeHandle) {
         ensureOk(native.queryStartAfter(handle, this._startAfterSnapshot._nativeHandle), native, 'queryStartAfter');
       }
+      if (this._startAfterRawAnchor) {
+        ensureOk(native.queryStartAfterRaw(handle, this._startAfterRawAnchor.snap.rawHandleAt(this._startAfterRawAnchor.index)), native, 'queryStartAfterRaw');
+      }
       if (this._endAtSnapshot?._nativeHandle) {
         ensureOk(native.queryEndAt(handle, this._endAtSnapshot._nativeHandle), native, 'queryEndAt');
       }
@@ -835,6 +959,23 @@ return this;
     const handle = this.prepareNativeQuery();
     try {
       return parseQueryRows(native.queryExecute(this.client.engineHandle(), handle));
+    } finally {
+      native.queryFree(handle);
+    }
+  }
+
+  /**
+   * Raw page: no decode, no JSON. Walk it with count/resolve, page with
+   * startAfterRaw, free when done. Scan-many/touch-few is the shape this
+   * pays for; resolving every row costs the same as get().
+   */
+  async getRaw(): Promise<RawQuerySnapshot> {
+    const native = this.client.nativeBindings();
+    const handle = this.prepareNativeQuery();
+    try {
+      const rs = native.queryExecuteRaw(this.client.engineHandle(), handle);
+      if (!rs) throw new Error(`queryExecuteRaw failed: ${native.lastError()}`);
+      return new RawQuerySnapshot(this.client, this.collection, rs);
     } finally {
       native.queryFree(handle);
     }

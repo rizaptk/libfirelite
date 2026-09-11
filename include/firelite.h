@@ -24,9 +24,21 @@ struct FL_NetSyncer;
 
 struct FL_Query;
 
+/// Raw (undecoded) document handle. `bytes` pins the storage-encoded
+/// buffer (zero copies for inlined docs); decode on demand with
+/// `fl_rawdoc_to_doc`. Bytes are opaque storage encoding — do not persist
+/// or compare across versions.
+struct FL_RawDoc;
+
+/// Slab of raw docs. Borrowed-handle contract mirrors FL_ResultSet:
+/// `fl_rawresult_get` pointers die with `fl_rawresult_free`.
+struct FL_RawResultSet;
+
 struct FL_ResultSet;
 
 struct FL_Transaction;
+
+struct FL_ViewDoc;
 
 struct FL_Watch;
 
@@ -34,6 +46,19 @@ using FL_OnSnapshotCallback = void(*)(const char *collection,
                                       const char *path,
                                       int32_t kind,
                                       void *user_data);
+
+using FlWalkCallback = bool(*)(const char *id,
+                               uintptr_t id_len,
+                               const uint8_t *bytes,
+                               uintptr_t bytes_len,
+                               void *userdata);
+
+/// View-walk callback: borrowed id + a borrowed view handle (valid for the
+/// call only — do not free, do not retain). Return true to continue.
+using FlViewWalkCallback = bool(*)(const char *id,
+                                   uintptr_t id_len,
+                                   const FL_ViewDoc *view,
+                                   void *userdata);
 
 extern "C" {
 
@@ -228,6 +253,72 @@ uintptr_t fl_result_set_count(FL_ResultSet *results);
 FL_Doc *fl_result_set_get_doc(FL_ResultSet *results, uintptr_t index);
 
 void fl_result_set_free(FL_ResultSet *results);
+
+FL_RawResultSet *fl_query_execute_raw(FL_Engine *engine, const FL_Query *query);
+
+uintptr_t fl_rawresult_count(FL_RawResultSet *results);
+
+FL_RawDoc *fl_rawresult_get(FL_RawResultSet *results, uintptr_t index);
+
+void fl_rawresult_free(FL_RawResultSet *results);
+
+/// Borrowed byte view of a raw doc. Returns null on null handle; `*len_out`
+/// (when non-null) receives the length. Valid until fl_rawresult_free —
+/// zero copies for inlined docs.
+const uint8_t *fl_rawdoc_bytes(const FL_RawDoc *doc, uintptr_t *len_out);
+
+/// Borrowed id view of a raw doc (for keyset paging without decoding).
+/// Rust Strings are NOT NUL-terminated, so the length goes through
+/// `*len_out` (when non-null) — read `(ptr, len)`, do NOT treat as CStr.
+/// Valid until fl_rawresult_free.
+const char *fl_rawdoc_id(const FL_RawDoc *doc, uintptr_t *len_out);
+
+/// Keyset anchor from a raw row. `id`-ordered queries bind the id with no
+/// decode; other order fields decode the row ONCE per page (not per row).
+int32_t fl_query_start_after_raw(FL_Query *query, const FL_RawDoc *anchor_doc);
+
+/// The pointer resolver: decode a raw row into an owned FL_Doc (blob
+/// fields inflated via the engine, same as a decoded query row).
+FL_Doc *fl_rawdoc_to_doc(FL_Engine *engine, const FL_RawDoc *raw_doc, const char *collection);
+
+int64_t fl_cursor_walk(FL_Engine *engine,
+                       const FL_Query *query,
+                       FlWalkCallback callback,
+                       void *userdata);
+
+FL_ViewDoc *fl_view_get(FL_Engine *engine, const char *collection, const char *doc_id);
+
+void fl_view_free(FL_ViewDoc *view);
+
+uintptr_t fl_view_field_count(const FL_ViewDoc *view);
+
+bool fl_view_has_field(const FL_ViewDoc *view, const char *key);
+
+bool fl_view_get_int(const FL_ViewDoc *view, const char *key, int64_t *out);
+
+bool fl_view_get_float(const FL_ViewDoc *view, const char *key, double *out);
+
+int32_t fl_view_get_bool(const FL_ViewDoc *view, const char *key);
+
+/// Borrowed UTF-8 view of a String field. Returns null when missing or not
+/// a String; `*len_out` (when non-null) receives the byte length. Valid
+/// until fl_view_free — same borrowed contract as fl_rawdoc_bytes.
+const char *fl_view_get_str(const FL_ViewDoc *view, const char *key, uintptr_t *len_out);
+
+/// Borrowed view of a Binary field. Same lifetime contract as above.
+const uint8_t *fl_view_get_bytes(const FL_ViewDoc *view, const char *key, uintptr_t *len_out);
+
+/// Escape hatch: full owned decode of the pinned bytes (links unresolved —
+/// follow with fl_doc_resolve_blobs when needed).
+FL_Doc *fl_view_to_doc(const FL_ViewDoc *view, const char *doc_id);
+
+/// One-call lazy scan: lends each row as a view (no decode, no owned
+/// construction). Returns rows visited, -1 on error. Same no-reentry
+/// contract as fl_cursor_walk.
+int64_t fl_cursor_walk_view(FL_Engine *engine,
+                            const FL_Query *query,
+                            FlViewWalkCallback callback,
+                            void *userdata);
 
 /// Bulk result-set to JSON: one call, one JSON array string, no per-doc
 /// DOM and no per-doc FFI round trips. Byte-identical to joining

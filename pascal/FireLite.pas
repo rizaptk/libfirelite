@@ -29,6 +29,9 @@ type
   TFLDocument = class;
   TFLArray = class;
   TFLQuery = class;
+  TFLRawDoc = class;
+  TFLRawResultSet = class;
+  TFLViewDoc = class;
   TFLBatch = class;
   TFLTransaction = class;
   TFLDocumentRef = class;
@@ -122,6 +125,56 @@ type
     procedure Commit;
   end;
 
+  { TFLRawDoc: borrowed row of a raw result set (v0.8.3+). The wrapper is
+    yours to free; the native handle belongs to the TFLRawResultSet. }
+  TFLRawDoc = class
+  private
+    FDB: TFireLite;
+    FHandle: PFL_RawDoc;
+  public
+    constructor CreateBorrowed(ADB: TFireLite; AHandle: PFL_RawDoc);
+    function Id: string;
+    function Bytes: TBytes;
+    { Decode into an owned TFLDocument (blobs inflated). Free the result. }
+    function Resolve(const Collection: string): TFLDocument;
+    property Handle: PFL_RawDoc read FHandle;
+  end;
+
+  { TFLRawResultSet: pinned storage bytes per row (v0.8.3+). }
+  TFLRawResultSet = class
+  private
+    FDB: TFireLite;
+    FHandle: PFL_RawResultSet;
+  public
+    constructor Create(ADB: TFireLite; AHandle: PFL_RawResultSet);
+    destructor Destroy; override;
+    function Count: NativeUInt;
+    { Borrowed row — valid until Free/Destroy. Free the wrapper, not the handle. }
+    function Get(Index: NativeUInt): TFLRawDoc;
+    procedure Free;
+    property Handle: PFL_RawResultSet read FHandle;
+  end;
+
+  { TFLViewDoc: owned pinned-bytes handle with lazy typed pulls (v0.8.11+).
+    No decode, no owned construction; strict scalar matches. Free it. }
+  TFLViewDoc = class
+  private
+    FHandle: PFL_ViewDoc;
+  public
+    constructor Create(AHandle: PFL_ViewDoc);
+    destructor Destroy; override;
+    function FieldCount: NativeUInt;
+    function HasField(const Key: string): Boolean;
+    function GetInt(const Key: string; out Value: Int64): Boolean;
+    function GetFloat(const Key: string; out Value: Double): Boolean;
+    function GetBool(const Key: string; out Value: Boolean): Boolean;
+    function GetStr(const Key: string): string;
+    function GetBytes(const Key: string): TBytes;
+    { Full owned decode. Free the result. }
+    function ToDoc(const DocID: string): TFLDocument;
+    property Handle: PFL_ViewDoc read FHandle;
+  end;
+
   { TFLQuery: Optimized Parallel Query Engine }
   TFLQuery = class
   private
@@ -140,6 +193,7 @@ FHasLimit, FHasOffset: Boolean;
 FDeferBlobs: Boolean;
     FSelectFields: TStringList;
     FStartAt, FStartAfter, FEndAt, FEndBefore: PFL_Doc;
+    FStartAfterRaw: PFL_RawDoc;
     FWhereOrStr: array of record Field, Value: string; end;
     FWhereOrInt: array of record Field: string; Value: Int64; end;
 
@@ -179,6 +233,7 @@ function DeferBlobs(Defer: Boolean = True): TFLQuery;
 
     function StartAt(ASnapshot: TFLDocument): TFLQuery;
     function StartAfter(ASnapshot: TFLDocument): TFLQuery;
+    function StartAfterRaw(ARaw: TFLRawDoc): TFLQuery;
     function EndAt(ASnapshot: TFLDocument): TFLQuery;
     function EndBefore(ASnapshot: TFLDocument): TFLQuery;
 
@@ -190,6 +245,12 @@ function DeferBlobs(Defer: Boolean = True): TFLQuery;
     function Avg(const Field: string): Double;
 
     function GetJSON: string;
+    { Raw execution (v0.8.3+): pinned bytes per row. Free the result. }
+    function ExecuteRaw: TFLRawResultSet;
+    { Zero-alloc walk (v0.8.6+): one call per scan. Returns rows visited. }
+    function Walk(Callback: TFL_WalkCallback; UserData: Pointer): Int64;
+    { Lazy view walk (v0.8.11+): each row lent as a borrowed view handle. }
+    function WalkView(Callback: TFL_ViewWalkCallback; UserData: Pointer): Int64;
     function Delete: Int64;
     function DeleteLocal: Int64;
     function Patch(Doc: TFLDocument): Int64;
@@ -268,6 +329,9 @@ function DeferBlobs(Defer: Boolean = True): TFLQuery;
     function Backup(const Path: string): Integer;
     procedure Compact;
     function IsIndexesReady: Boolean;
+    { Borrowed point view (v0.8.11+): lazy pulls, no decode. Free it.
+      Returns nil when missing. }
+    function GetView(const Col, ID: string): TFLViewDoc;
     procedure SnapshotIndices;
     function InsertSubDoc(const Col, ID, SubCol, SubID: string; Doc: TFLDocument): Integer;
     function GetByRef(Doc: TFLDocument; const FieldKey: string): TFLDocument;
@@ -743,6 +807,7 @@ begin
     
     if FStartAt <> nil then fl_query_start_at(Result, FStartAt);
     if FStartAfter <> nil then fl_query_start_after(Result, FStartAfter);
+    if FStartAfterRaw <> nil then fl_query_start_after_raw(Result, FStartAfterRaw);
     if FEndAt <> nil then fl_query_end_at(Result, FEndAt);
     if FEndBefore <> nil then fl_query_end_before(Result, FEndBefore);
 
@@ -777,6 +842,150 @@ end;
 
 function TFLQuery.GetJSON: string;
 var Q: PFL_Query; begin Q := BuildNativeQuery; try Result := ConsumeCString(fl_query_execute(FDB.Handle, Q)); finally fl_query_free(Q); end; end;
+
+{ TFLRawDoc }
+
+constructor TFLRawDoc.CreateBorrowed(ADB: TFireLite; AHandle: PFL_RawDoc);
+begin FDB := ADB; FHandle := AHandle; end;
+
+function TFLRawDoc.Id: string;
+var P: PChar; L: SizeUInt;
+begin
+  P := fl_rawdoc_id(FHandle, @L);
+  if (P = nil) or (L = 0) then Exit('');
+  SetString(Result, P, L);
+end;
+
+function TFLRawDoc.Bytes: TBytes;
+var P: PByte; L: SizeUInt;
+begin
+  P := fl_rawdoc_bytes(FHandle, @L);
+  if P = nil then Exit(nil);
+  SetLength(Result, L);
+  if L > 0 then Move(P^, Result[0], L);
+end;
+
+function TFLRawDoc.Resolve(const Collection: string): TFLDocument;
+var H: PFL_Doc;
+begin
+  H := fl_rawdoc_to_doc(FDB.Handle, FHandle, PChar(Collection));
+  if H = nil then raise EFireLiteError.Create('fl_rawdoc_to_doc failed: ' + string(fl_last_error));
+  Result := TFLDocument.CreateFromHandle(H, True);
+end;
+
+{ TFLRawResultSet }
+
+constructor TFLRawResultSet.Create(ADB: TFireLite; AHandle: PFL_RawResultSet);
+begin FDB := ADB; FHandle := AHandle; end;
+
+destructor TFLRawResultSet.Destroy;
+begin Free; inherited; end;
+
+function TFLRawResultSet.Count: NativeUInt;
+begin Result := fl_rawresult_count(FHandle); end;
+
+function TFLRawResultSet.Get(Index: NativeUInt): TFLRawDoc;
+var H: PFL_RawDoc;
+begin
+  H := fl_rawresult_get(FHandle, Index);
+  if H = nil then raise EFireLiteError.Create('raw row out of range');
+  Result := TFLRawDoc.CreateBorrowed(FDB, H);
+end;
+
+procedure TFLRawResultSet.Free;
+begin if FHandle <> nil then begin fl_rawresult_free(FHandle); FHandle := nil; end; end;
+
+function TFLQuery.StartAfterRaw(ARaw: TFLRawDoc): TFLQuery;
+begin FStartAfterRaw := ARaw.Handle; Result := Self; end;
+
+function TFLQuery.ExecuteRaw: TFLRawResultSet;
+var Q: PFL_Query; H: PFL_RawResultSet;
+begin
+  Q := BuildNativeQuery; try
+    H := fl_query_execute_raw(FDB.Handle, Q);
+    if H = nil then raise EFireLiteError.Create('fl_query_execute_raw failed: ' + string(fl_last_error));
+    Result := TFLRawResultSet.Create(FDB, H);
+  finally fl_query_free(Q); end;
+end;
+
+function TFLQuery.Walk(Callback: TFL_WalkCallback; UserData: Pointer): Int64;
+var Q: PFL_Query;
+begin
+  Q := BuildNativeQuery; try
+    Result := fl_cursor_walk(FDB.Handle, Q, Callback, UserData);
+    if Result < 0 then raise EFireLiteError.Create('fl_cursor_walk failed: ' + string(fl_last_error));
+  finally fl_query_free(Q); end;
+end;
+
+function TFLQuery.WalkView(Callback: TFL_ViewWalkCallback; UserData: Pointer): Int64;
+var Q: PFL_Query;
+begin
+  Q := BuildNativeQuery; try
+    Result := fl_cursor_walk_view(FDB.Handle, Q, Callback, UserData);
+    if Result < 0 then raise EFireLiteError.Create('fl_cursor_walk_view failed: ' + string(fl_last_error));
+  finally fl_query_free(Q); end;
+end;
+
+{ TFLViewDoc }
+
+constructor TFLViewDoc.Create(AHandle: PFL_ViewDoc);
+begin FHandle := AHandle; end;
+
+destructor TFLViewDoc.Destroy;
+begin if FHandle <> nil then fl_view_free(FHandle); inherited; end;
+
+function TFLViewDoc.FieldCount: NativeUInt;
+begin Result := fl_view_field_count(FHandle); end;
+
+function TFLViewDoc.HasField(const Key: string): Boolean;
+begin Result := fl_view_has_field(FHandle, PChar(Key)); end;
+
+function TFLViewDoc.GetInt(const Key: string; out Value: Int64): Boolean;
+var V: Int64;
+begin
+  Result := fl_view_get_int(FHandle, PChar(Key), @V);
+  if Result then Value := V;
+end;
+
+function TFLViewDoc.GetFloat(const Key: string; out Value: Double): Boolean;
+var V: Double;
+begin
+  Result := fl_view_get_float(FHandle, PChar(Key), @V);
+  if Result then Value := V;
+end;
+
+function TFLViewDoc.GetBool(const Key: string; out Value: Boolean): Boolean;
+var R: cint32;
+begin
+  R := fl_view_get_bool(FHandle, PChar(Key));
+  Result := R >= 0;
+  if Result then Value := R <> 0;
+end;
+
+function TFLViewDoc.GetStr(const Key: string): string;
+var P: PChar; L: SizeUInt;
+begin
+  P := fl_view_get_str(FHandle, PChar(Key), @L);
+  if (P = nil) or (L = 0) then Exit('');
+  SetString(Result, P, L);
+end;
+
+function TFLViewDoc.GetBytes(const Key: string): TBytes;
+var P: PByte; L: SizeUInt;
+begin
+  P := fl_view_get_bytes(FHandle, PChar(Key), @L);
+  if P = nil then Exit(nil);
+  SetLength(Result, L);
+  if L > 0 then Move(P^, Result[0], L);
+end;
+
+function TFLViewDoc.ToDoc(const DocID: string): TFLDocument;
+var H: PFL_Doc;
+begin
+  H := fl_view_to_doc(FHandle, PChar(DocID));
+  if H = nil then raise EFireLiteError.Create('fl_view_to_doc failed: ' + string(fl_last_error));
+  Result := TFLDocument.CreateFromHandle(H, True);
+end;
 
 function TFLQuery.WhereOrStr(const Field, Value: string): TFLQuery;
 begin
@@ -1062,6 +1271,14 @@ function TFireLite.CreateCloudClientSyncer(const ClientID, RoomName, RoomKey, Au
 function TFireLite.Backup(const Path: string): Integer; begin Result := fl_engine_backup(FHandle, PChar(Path)); end;
 procedure TFireLite.Compact; begin CheckStatus(fl_engine_compact(FHandle), 'Compact'); end;
 function TFireLite.IsIndexesReady: Boolean; begin Result := fl_engine_is_indexes_ready(FHandle); end;
+
+function TFireLite.GetView(const Col, ID: string): TFLViewDoc;
+var H: PFL_ViewDoc;
+begin
+  H := fl_view_get(FHandle, PChar(Col), PChar(ID));
+  if H = nil then Exit(nil);
+  Result := TFLViewDoc.Create(H);
+end;
 procedure TFireLite.SnapshotIndices; begin CheckStatus(fl_engine_snapshot_indices(FHandle), 'SnapshotIndices'); end;
 function TFireLite.ListIndexes(const ACollection: string): string; begin Result := ConsumeCString(fl_engine_list_indexes(FHandle, PChar(ACollection))); end;
 function TFireLite.GetAuditLog: string; begin Result := ConsumeCString(fl_engine_get_audit_log(FHandle)); end;

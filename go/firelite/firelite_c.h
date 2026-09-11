@@ -17,6 +17,9 @@ typedef struct FL_Doc FL_Doc;
 typedef struct FL_Engine FL_Engine;
 typedef struct FL_NetSyncer FL_NetSyncer;
 typedef struct FL_Query FL_Query;
+typedef struct FL_RawDoc FL_RawDoc;
+typedef struct FL_RawResultSet FL_RawResultSet;
+typedef struct FL_ViewDoc FL_ViewDoc;
 typedef struct FL_ResultSet FL_ResultSet;
 typedef struct FL_Transaction FL_Transaction;
 typedef struct FL_Watch FL_Watch;
@@ -130,6 +133,35 @@ FL_Doc *fl_result_set_get_doc(FL_ResultSet *results, uintptr_t index);
 void fl_result_set_free(FL_ResultSet *results);
 /* Bulk result-set to JSON: one call, one JSON array string. Free with fl_string_free. */
 char *fl_result_set_to_json(FL_ResultSet *results);
+/* Raw result sets (v0.8.3): pinned storage bytes instead of decoded docs.
+   Borrowed-handle contract mirrors FL_ResultSet: row pointers die with
+   fl_rawresult_free. Bytes are opaque storage encoding. */
+FL_RawResultSet *fl_query_execute_raw(FL_Engine *engine, const FL_Query *query);
+uintptr_t fl_rawresult_count(FL_RawResultSet *results);
+FL_RawDoc *fl_rawresult_get(FL_RawResultSet *results, uintptr_t index);
+void fl_rawresult_free(FL_RawResultSet *results);
+const uint8_t *fl_rawdoc_bytes(const FL_RawDoc *doc, uintptr_t *len_out);
+const char *fl_rawdoc_id(const FL_RawDoc *doc, uintptr_t *len_out);
+int32_t fl_query_start_after_raw(FL_Query *query, const FL_RawDoc *anchor_doc);
+FL_Doc *fl_rawdoc_to_doc(FL_Engine *engine, const FL_RawDoc *raw_doc, const char *collection);
+/* Zero-alloc walk (v0.8.6): one call per scan; rows lent to the callback
+   (true = continue). Returns rows visited, -1 on error. */
+typedef bool (*FlWalkCallback)(const char *id, uintptr_t id_len, const uint8_t *bytes, uintptr_t bytes_len, void *userdata);
+int64_t fl_cursor_walk(FL_Engine *engine, const FL_Query *query, FlWalkCallback callback, void *userdata);
+/* Borrowed views (v0.8.11): pinned bytes + lazy typed pulls, no owned
+   construction. Strict scalar matches; views never inflate blobs. */
+FL_ViewDoc *fl_view_get(FL_Engine *engine, const char *collection, const char *doc_id);
+void fl_view_free(FL_ViewDoc *view);
+uintptr_t fl_view_field_count(const FL_ViewDoc *view);
+bool fl_view_has_field(const FL_ViewDoc *view, const char *key);
+bool fl_view_get_int(const FL_ViewDoc *view, const char *key, int64_t *out);
+bool fl_view_get_float(const FL_ViewDoc *view, const char *key, double *out);
+int32_t fl_view_get_bool(const FL_ViewDoc *view, const char *key);
+const char *fl_view_get_str(const FL_ViewDoc *view, const char *key, uintptr_t *len_out);
+const uint8_t *fl_view_get_bytes(const FL_ViewDoc *view, const char *key, uintptr_t *len_out);
+FL_Doc *fl_view_to_doc(const FL_ViewDoc *view, const char *doc_id);
+typedef bool (*FlViewWalkCallback)(const char *id, uintptr_t id_len, const FL_ViewDoc *view, void *userdata);
+int64_t fl_cursor_walk_view(FL_Engine *engine, const FL_Query *query, FlViewWalkCallback callback, void *userdata);
 int32_t fl_query_aggregate_count(FL_Query *query);
 int32_t fl_query_aggregate_sum(FL_Query *query, const char *field);
 int32_t fl_query_aggregate_avg(FL_Query *query, const char *field);

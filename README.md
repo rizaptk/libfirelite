@@ -11,7 +11,9 @@ It stores typed JSON-like documents in binary form, runs **fully in-process** li
 (no server, no daemon, no network config), and exposes a **flat C ABI** so it can be embedded in
 apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus, and more.
 
-> **Status of this repo:** binary/SDK **preview** of FireLite **v0.8.0**.
+> **Status of this repo:** binary/SDK **preview** of FireLite **v0.8.13** — the lazy-read
+> release: zero-copy raw rows, borrowed cursor walks and typed views across the C ABI
+> and every SDK, plus 1:1 full-scan benchmark parity with SQLite.
 > It exists to share and try the library. Open-sourcing the engine itself is still under consideration —
 > the Rust source is **not** included here. See [License](#license).
 
@@ -51,9 +53,9 @@ Binaries are published as versioned **Release assets** and never committed to gi
 
 | Asset | Contents |
 |---|---|
-| `libfirelite-0.8.0-windows.zip` | `firelite.dll`, `firelite.lib`, `firelite-cli.exe`, `firelite-cloudserver.exe`, `benchmark.exe`, `sqlite_bench.exe` |
-| `libfirelite-0.8.0-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `firelite-cloudserver`, `benchmark`, `sqlite_bench` (binary carried over — source unchanged) |
-| `libfirelite-0.8.0-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
+| `libfirelite-0.8.13-windows.zip` | `firelite.dll`, `firelite-cli.exe`, `firelite-cloudserver.exe`, `benchmark.exe`, `sqlite_bench.exe` (no import lib — MinGW links the DLL directly, see `windows/README.md`) |
+| `libfirelite-0.8.13-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `firelite-cloudserver`, `benchmark`, `sqlite_bench` |
+| `libfirelite-0.8.13-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
 
 Extract the archive for your platform into the matching directory (`windows/`, `linux/`,
 or your app's `jniLibs/` for Android). Prior releases keep their own versioned assets.
@@ -64,7 +66,8 @@ or your app's `jniLibs/` for Android). Prior releases keep their own versioned a
 
 ```c
 #include "firelite.h"
-// link: firelite.lib  |  run: firelite.dll next to your .exe
+// MinGW links the DLL directly (no import lib shipped): -Lwindows -lfirelite
+// MSVC is unsupported upstream — generate your own import lib if required.
 FL_Engine* db = fl_engine_open("./data.firelite");
 FL_Doc* d = fl_doc_new();
 fl_doc_insert_str(d, "name", "alice");
@@ -88,6 +91,9 @@ windows\firelite-cli.exe --db .\demo.db set users/alice --data '{"name":"Alice",
 windows\firelite-cli.exe --db .\demo.db get users/alice
 windows\firelite-cli.exe --db .\demo.db query users --where age:gte:21 --order name:asc --limit 10
 ```
+
+One-shot commands block briefly (≤30s) for background index recovery after open —
+queries issued first would otherwise silently degrade (cursor bounds ignored, pages repeat).
 
 ### Go
 
@@ -250,6 +256,27 @@ Put the same `encryption_key` on every node sharing the room; expect
 design. Not protected: cloud operator visibility, passive LAN observers (no E2E
 yet), impersonators replaying fingerprints (assertions, not proofs).
 
+## Lazy reads: raw rows, cursor walks, typed views (v0.8.2+)
+
+Three borrowed (zero-alloc) read shapes for scan-many/touch-few workloads.
+Rows are lent, never owned — valid for the call/slab only; resolve selected rows
+with `to_doc`. Blob fields never inflate inside views.
+
+| Shape | C ABI | Go | JS | Pascal |
+|---|---|---|---|---|
+| Raw page (pinned storage bytes) | `fl_query_execute_raw`, `fl_rawdoc_bytes`/`_id`, `fl_query_start_after_raw`, `fl_rawdoc_to_doc` | `ExecuteQueryRaw`, `RawDoc.Bytes`/`ID`, `StartAfterRaw`, `ToDoc` | `getRaw()`, `RawQuerySnapshot.resolve`, `startAfterRaw` | `TFLQuery.ExecuteRaw`, `TFLRawDoc`, `StartAfterRaw` |
+| Cursor walk (one FFI call per scan, early-stop) | `fl_cursor_walk` + `FlWalkCallback` | `Engine.CursorWalk` + `WalkCallback` | — (use raw paging; a walk you can't touch rows in is a counting loop) | `TFLQuery.Walk` + `TFL_WalkCallback` |
+| Typed view (lazy per-field pulls) | `fl_view_get`, `fl_view_get_int/float/bool/str/bytes`, `fl_view_to_doc`, `fl_cursor_walk_view` | `GetView`, `GetInt/Float/Bool/String/Bytes`, `HasField`, `ToDoc`, `CursorWalkView` | `viewDoc()`, `ViewDocSnapshot` | `TFireLite.GetView`, `TFLViewDoc`, `TFLQuery.WalkView` |
+
+```c
+// byte-level walk: count rows, touch nothing owned
+int64_t n = fl_cursor_walk(db, q,_cb, &ctx);   // cb returns false to stop early
+```
+
+```go
+n, _ := db.CursorWalk(q, func(id string, bytes []byte) bool { return true })
+```
+
 ## Benchmark
 
 `bench/benchmark.cpp` is the **official harness**: it drives the engine only through the public
@@ -269,6 +296,12 @@ mirror**: same documents, same indexes, same loop counts, same math, same matrix
 | `Bulk Upd/Del` | 100-doc bulk update, 100-doc bulk delete |
 | `Startup/Flush` | Engine open (ms) / clean shutdown (ms) |
 | `Size` | On-disk size |
+
+After the matrix, a **FULL SCAN** section (×5 iters over all live docs, 1:1 on both
+harnesses): decoded forward/reverse pages, byte/key-only scan (`fl_cursor_walk` vs
+id-column select), and the lazy stage (2-pull view walk vs narrow id/tenant/age
+select). `benchmark --gate` enforces the regression gate on median-of-3 Manual runs
+(`Qry>=0.85Cmp`, Off/Cur within 2×, `Get>5xQry`, `Batch>=Single` + smoke floors).
 
 ### Run (Windows, release binaries)
 
@@ -324,7 +357,7 @@ Linux/macOS equivalents use `-L../linux` / `-L../macos` and `-lfirelite`
 
 ## Version
 
-This preview tracks engine **v0.8.0** (`VERSION`). Header, libraries, gateways and benchmarks
+This preview tracks engine **v0.8.13** (`VERSION`). Header, libraries, gateways and benchmarks
 are all taken from the same engine revision.
 
 ## License

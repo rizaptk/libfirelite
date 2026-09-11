@@ -14,6 +14,18 @@ static inline void firelite_watch_bridge_const(const char* collection, const cha
 static inline FL_Watch* firelite_watch_bridge_register(FL_Engine* engine, const char* collection, void* user_data) {
 	return fl_engine_watch(engine, collection, firelite_watch_bridge_const, user_data);
 }
+extern bool fireliteWalkBridge(char* id, uintptr_t id_len, uint8_t* bytes, uintptr_t bytes_len, void* user_data);
+static inline int64_t firelite_walk_register(FL_Engine* engine, const FL_Query* query, void* user_data) {
+	// ponytail: the Go bridge takes non-const pointers (cgo has no const);
+	// it never mutates — the cast keeps the public typedef const-correct.
+	return fl_cursor_walk(engine, query, (FlWalkCallback)fireliteWalkBridge, user_data);
+}
+extern bool fireliteViewWalkBridge(char* id, uintptr_t id_len, FL_ViewDoc* view, void* user_data);
+static inline int64_t firelite_view_walk_register(FL_Engine* engine, const FL_Query* query, void* user_data) {
+	// ponytail: same const-cast shaping as the byte walk above; the engine
+	// lends the view for the call, Go must not retain the handle.
+	return fl_cursor_walk_view(engine, query, (FlViewWalkCallback)fireliteViewWalkBridge, user_data);
+}
 */
 import "C"
 
@@ -35,6 +47,9 @@ type (
 	Transaction struct{ ptr *C.FL_Transaction }
 	NetSyncer   struct{ ptr *C.FL_NetSyncer }
 	ResultSet   struct{ ptr *C.FL_ResultSet }
+	RawDoc      struct{ ptr *C.FL_RawDoc }
+	RawResultSet struct{ ptr *C.FL_RawResultSet }
+	ViewDoc     struct{ ptr *C.FL_ViewDoc }
 	CloudSync   struct{ ptr *C.FL_CloudSync }
 	Watch       struct {
 		ptr    *C.FL_Watch
@@ -965,6 +980,268 @@ func (r *ResultSet) ToJSON() (string, error) {
 	}
 	defer C.fl_string_free(ptr)
 	return C.GoString(ptr), nil
+}
+
+// ExecuteQueryRaw runs the query and returns pinned storage bytes per row
+// instead of decoded docs (v0.8.3+). Bytes are opaque storage encoding:
+// hash, count, export, or resolve them with RawDoc.ToDoc.
+func (e *Engine) ExecuteQueryRaw(q *Query) (*RawResultSet, error) {
+	ptr := C.fl_query_execute_raw(e.ptr, q.ptr)
+	if ptr == nil {
+		return nil, fmt.Errorf("fl_query_execute_raw failed: %s", lastError())
+	}
+	return &RawResultSet{ptr: ptr}, nil
+}
+
+func (r *RawResultSet) Count() uintptr {
+	if r == nil || r.ptr == nil {
+		return 0
+	}
+	return uintptr(C.fl_rawresult_count(r.ptr))
+}
+
+// GetRawDoc returns the raw row at the given index. Borrowed by the
+// result set like ResultSet.GetDoc: do not free, free the set first.
+func (r *RawResultSet) GetRawDoc(index uintptr) (*RawDoc, error) {
+	if r == nil || r.ptr == nil {
+		return nil, errors.New("raw result set is nil")
+	}
+	ptr := C.fl_rawresult_get(r.ptr, C.uintptr_t(index))
+	if ptr == nil {
+		return nil, nil
+	}
+	return &RawDoc{ptr: ptr}, nil
+}
+
+func (r *RawResultSet) Free() {
+	if r != nil && r.ptr != nil {
+		C.fl_rawresult_free(r.ptr)
+		r.ptr = nil
+	}
+}
+
+// ID returns the row's doc id (borrowed view copied out).
+func (d *RawDoc) ID() (string, error) {
+	if d == nil || d.ptr == nil {
+		return "", errors.New("raw doc is nil")
+	}
+	var ln C.uintptr_t
+	ptr := C.fl_rawdoc_id(d.ptr, &ln)
+	if ptr == nil {
+		return "", fmt.Errorf("fl_rawdoc_id failed: %s", lastError())
+	}
+	return C.GoStringN(ptr, C.int(ln)), nil
+}
+
+// Bytes returns a copy of the row's storage-encoded bytes.
+func (d *RawDoc) Bytes() ([]byte, error) {
+	if d == nil || d.ptr == nil {
+		return nil, errors.New("raw doc is nil")
+	}
+	var ln C.uintptr_t
+	ptr := C.fl_rawdoc_bytes(d.ptr, &ln)
+	if ptr == nil {
+		return nil, fmt.Errorf("fl_rawdoc_bytes failed: %s", lastError())
+	}
+	return C.GoBytes(unsafe.Pointer(ptr), C.int(ln)), nil
+}
+
+// StartAfterRaw binds the next page's cursor from a raw row (no decode).
+func (q *Query) StartAfterRaw(anchor *RawDoc) error {
+	return checkStatus("fl_query_start_after_raw", C.fl_query_start_after_raw(q.ptr, anchor.ptr))
+}
+
+// ToDoc resolves a raw row into a decoded Doc (blobs inflated).
+func (d *RawDoc) ToDoc(e *Engine, collection string) (*Doc, error) {
+	cc, free := cString(collection)
+	defer free()
+	ptr := C.fl_rawdoc_to_doc(e.ptr, d.ptr, cc)
+	if ptr == nil {
+		return nil, fmt.Errorf("fl_rawdoc_to_doc failed: %s", lastError())
+	}
+	return &Doc{ptr: ptr}, nil
+}
+
+// WalkCallback receives one row per call (id + storage bytes); return
+// false to stop early. Bytes are only valid for the call duration.
+type WalkCallback func(id string, bytes []byte) bool
+
+//export fireliteWalkBridge
+func fireliteWalkBridge(id *C.char, idLen C.uintptr_t, bytes *C.uint8_t, bytesLen C.uintptr_t, userData unsafe.Pointer) C.bool {
+	h := cgo.Handle(userData)
+	cb, ok := h.Value().(WalkCallback)
+	if !ok {
+		return C.bool(false)
+	}
+	return C.bool(cb(C.GoStringN(id, C.int(idLen)), C.GoBytes(unsafe.Pointer(bytes), C.int(bytesLen))))
+}
+
+// CursorWalk runs the query as a single zero-alloc walk (v0.8.6+),
+// invoking callback per row. Returns rows visited.
+func (e *Engine) CursorWalk(q *Query, callback WalkCallback) (int64, error) {
+	if callback == nil {
+		return -1, errors.New("walk callback is nil")
+	}
+	h := cgo.NewHandle(callback)
+	defer h.Delete()
+	n := C.firelite_walk_register(e.ptr, q.ptr, unsafe.Pointer(h))
+	if n < 0 {
+		return -1, fmt.Errorf("fl_cursor_walk failed: %s", lastError())
+	}
+	return int64(n), nil
+}
+
+// ViewDoc pins storage bytes for lazy per-field pulls (v0.8.11+): no
+// decode, no owned construction. Borrowed views never inflate blobs.
+func (e *Engine) GetView(collection, docID string) (*ViewDoc, error) {
+	cc, freeC := cString(collection)
+	defer freeC()
+	ci, freeI := cString(docID)
+	defer freeI()
+	ptr := C.fl_view_get(e.ptr, cc, ci)
+	if ptr == nil {
+		return nil, nil
+	}
+	return &ViewDoc{ptr: ptr}, nil
+}
+
+func (d *ViewDoc) Free() {
+	if d != nil && d.ptr != nil {
+		C.fl_view_free(d.ptr)
+		d.ptr = nil
+	}
+}
+
+func (d *ViewDoc) FieldCount() uintptr {
+	if d == nil || d.ptr == nil {
+		return 0
+	}
+	return uintptr(C.fl_view_field_count(d.ptr))
+}
+
+func (d *ViewDoc) HasField(key string) bool {
+	if d == nil || d.ptr == nil {
+		return false
+	}
+	ck, free := cString(key)
+	defer free()
+	return bool(C.fl_view_has_field(d.ptr, ck))
+}
+
+func (d *ViewDoc) GetInt(key string) (int64, bool) {
+	if d == nil || d.ptr == nil {
+		return 0, false
+	}
+	ck, free := cString(key)
+	defer free()
+	var out C.int64_t
+	if !bool(C.fl_view_get_int(d.ptr, ck, &out)) {
+		return 0, false
+	}
+	return int64(out), true
+}
+
+func (d *ViewDoc) GetFloat(key string) (float64, bool) {
+	if d == nil || d.ptr == nil {
+		return 0, false
+	}
+	ck, free := cString(key)
+	defer free()
+	var out C.double
+	if !bool(C.fl_view_get_float(d.ptr, ck, &out)) {
+		return 0, false
+	}
+	return float64(out), true
+}
+
+// GetBool returns (value, ok): ok is false when missing or not a bool.
+func (d *ViewDoc) GetBool(key string) (bool, bool) {
+	if d == nil || d.ptr == nil {
+		return false, false
+	}
+	ck, free := cString(key)
+	defer free()
+	switch v := C.fl_view_get_bool(d.ptr, ck); v {
+	case 1:
+		return true, true
+	case 0:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// GetString returns a copy of a String field's bytes.
+func (d *ViewDoc) GetString(key string) (string, bool) {
+	if d == nil || d.ptr == nil {
+		return "", false
+	}
+	ck, free := cString(key)
+	defer free()
+	var ln C.uintptr_t
+	ptr := C.fl_view_get_str(d.ptr, ck, &ln)
+	if ptr == nil {
+		return "", false
+	}
+	return C.GoStringN(ptr, C.int(ln)), true
+}
+
+// GetBytes returns a copy of a Binary field's bytes.
+func (d *ViewDoc) GetBytes(key string) ([]byte, bool) {
+	if d == nil || d.ptr == nil {
+		return nil, false
+	}
+	ck, free := cString(key)
+	defer free()
+	var ln C.uintptr_t
+	ptr := C.fl_view_get_bytes(d.ptr, ck, &ln)
+	if ptr == nil {
+		return nil, false
+	}
+	return C.GoBytes(unsafe.Pointer(ptr), C.int(ln)), true
+}
+
+// ToDoc fully decodes the pinned bytes into an owned Doc.
+func (d *ViewDoc) ToDoc(docID string) (*Doc, error) {
+	if d == nil || d.ptr == nil {
+		return nil, errors.New("view doc is nil")
+	}
+	ci, free := cString(docID)
+	defer free()
+	ptr := C.fl_view_to_doc(d.ptr, ci)
+	if ptr == nil {
+		return nil, fmt.Errorf("fl_view_to_doc failed: %s", lastError())
+	}
+	return &Doc{ptr: ptr}, nil
+}
+
+// ViewWalkCallback receives one row per call as a borrowed view handle
+// (valid for the call only); return false to stop early.
+type ViewWalkCallback func(id string, view *ViewDoc) bool
+
+//export fireliteViewWalkBridge
+func fireliteViewWalkBridge(id *C.char, idLen C.uintptr_t, view *C.FL_ViewDoc, userData unsafe.Pointer) C.bool {
+	h := cgo.Handle(userData)
+	cb, ok := h.Value().(ViewWalkCallback)
+	if !ok {
+		return C.bool(false)
+	}
+	return C.bool(cb(C.GoStringN(id, C.int(idLen)), &ViewDoc{ptr: view}))
+}
+
+// CursorWalkView runs the query lending each row as a view (v0.8.11+).
+// The ViewDoc handles are borrowed: valid only inside the callback.
+func (e *Engine) CursorWalkView(q *Query, callback ViewWalkCallback) (int64, error) {
+	if callback == nil {
+		return -1, errors.New("walk callback is nil")
+	}
+	h := cgo.NewHandle(callback)
+	defer h.Delete()
+	n := C.firelite_view_walk_register(e.ptr, q.ptr, unsafe.Pointer(h))
+	if n < 0 {
+		return -1, fmt.Errorf("fl_cursor_walk_view failed: %s", lastError())
+	}
+	return int64(n), nil
 }
 
 func ownedCStringJSON(fn func() *C.char) (string, error) {

@@ -23,10 +23,11 @@ tar xzf libfirelite-0.8.0-linux.tar.gz -C /path/to/libfirelite/linux
 chmod +x firelite-cli firelite-cloudserver benchmark sqlite_bench  # required if the tarball lost exec bits
 ```
 
-Verify:
+Verify (the v0.8.13rev1 `benchmark` carries an `$ORIGIN` rpath and finds
+`libfirelite.so` beside itself — no `LD_LIBRARY_PATH` needed for it):
 
 ```bash
-LD_LIBRARY_PATH=. ./benchmark --docs=1000
+./benchmark --docs=1000
 LD_LIBRARY_PATH=. ./sqlite_bench --docs=1000
 ./firelite-cloudserver --db-path ./cloud.db --admin-bind 127.0.0.1:8081 --sync-bind 0.0.0.0:8080
 ```

@@ -4,13 +4,16 @@ Windows binaries are distributed as the `libfirelite-<version>-windows.zip`
 **Release asset**, not stored in git. Contents:
 
 ```text
-firelite.dll            # engine (keep next to your .exe at runtime)
-firelite.lib            # import library for MSVC / MinGW linking
-firelite-cli.exe        # CLI tool
+firelite.dll              # engine (keep next to your .exe at runtime)
+firelite-cli.exe          # CLI tool
 firelite-cloudserver.exe  # managed sync hub + admin console (v0.8.0+)
-benchmark.exe           # official FireLite harness (bench/benchmark.cpp)
-sqlite_bench.exe        # fair SQLite mirror (bench/sqlite_bench.cpp)
+benchmark.exe             # official FireLite harness (bench/benchmark.cpp)
+sqlite_bench.exe          # fair SQLite mirror (bench/sqlite_bench.cpp)
 ```
+
+No import lib is shipped: MinGW links the DLL directly (`-L. -lfirelite`
+falls through to `firelite.dll`, always fresh). MSVC is unsupported upstream —
+generate your own import lib if required.
 
 Extract into this directory, then verify:
 
