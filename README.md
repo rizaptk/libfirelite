@@ -1,21 +1,18 @@
 # libfirelite
 
-**Prebuilt FireLite library + SDK gateways + CLI + fair benchmarks (preview).**
+Prebuilt FireLite engine library, SDK gateways, CLI, sync hub, and benchmarks.
 
-> **License:** closed-source **evaluation license** — see [`LICENSE`](LICENSE).
-> Evaluation, benchmarking and prototyping allowed; redistribution and production
-> use require permission. Open-sourcing the engine is under consideration.
+> **License:** closed-source [evaluation license](LICENSE) — evaluation,
+> benchmarking and prototyping allowed; redistribution and production use
+> require permission.
 
 FireLite is an embedded, Firestore-style document database written in Rust.
-It stores typed JSON-like documents in binary form, runs **fully in-process** like SQLite
-(no server, no daemon, no network config), and exposes a **flat C ABI** so it can be embedded in
-apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus, and more.
+It stores typed JSON-like documents in binary form, runs fully in-process like
+SQLite (no server process to operate for the engine itself), and exposes a flat
+C ABI for C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus, and more.
 
-> **Status of this repo:** binary/SDK **preview** of FireLite **v0.8.13** — the lazy-read
-> release: zero-copy raw rows, borrowed cursor walks and typed views across the C ABI
-> and every SDK, plus 1:1 full-scan benchmark parity with SQLite.
-> It exists to share and try the library. Open-sourcing the engine itself is still under consideration —
-> the Rust source is **not** included here. See [License](#license).
+This repo tracks engine **v0.8.18** and contains binaries + SDK sources only.
+The engine source is not included.
 
 ## What is FireLite?
 
@@ -28,10 +25,9 @@ apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus
 - **Indexing** — secondary B-Tree, composite, and full-text (FTS) indexes, built in the background.
 - **Zero-copy projection** — queries cherry-pick fields from memory-mapped binary slices;
   deferred blob fetching (`defer_blobs`) keeps list views fast.
-- **Optional sync** — **Net Sync** (LAN mesh, mDNS) and **Cloud Sync**
-  (central WebSocket hub + offline-first clients). Since v0.7.13 sync is part of the
-  default build, so the `fl_net_syncer_*` / `fl_cloud_sync_*` C ABI symbols are
-  always present in release libraries (build contract: plain `cargo build --release`).
+- **Optional sync** — **Net Sync** (LAN mesh) and **Cloud Sync** (central WebSocket
+  hub + offline-first clients). Release libraries are built with sync enabled
+  (plain `cargo build --release`), so `fl_net_syncer_*` / `fl_cloud_sync_*` are present.
 
 ## Contents
 
@@ -46,6 +42,7 @@ apps written in C/C++, Go, JavaScript/TypeScript (Node.js + Bun), Pascal/Lazarus
 | `js/` | JS/TS SDK over C-FFI (`client.ts`, `native.ts`, koffi for Node, `bun:ffi` for Bun). Tauri gateway excluded — it needs the engine source |
 | `pascal/` | Lazarus/FPC wrapper (`FireLiteRaw.pas`, `FireLite.pas`, `FireLiteComponent.pas`; packages `FireLitePkg.lpk` runtime + `FireLiteDesign.lpk` designtime) |
 | `bench/` | `benchmark.cpp` (official FireLite harness) + `sqlite_bench.cpp` (fair SQLite mirror) |
+| `docs/` | `reads.md` (choosing a read path) + `benchmarking.md` (methodology, scoreboard) |
 
 ## Releases
 
@@ -53,21 +50,21 @@ Binaries are published as versioned **Release assets** and never committed to gi
 
 | Asset | Contents |
 |---|---|
-| `libfirelite-0.8.13-windows.zip` | `firelite.dll`, `firelite-cli.exe`, `firelite-cloudserver.exe`, `benchmark.exe`, `sqlite_bench.exe` (no import lib — MinGW links the DLL directly, see `windows/README.md`) |
-| `libfirelite-0.8.13-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `firelite-cloudserver`, `benchmark`, `sqlite_bench` |
-| `libfirelite-0.8.13-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
+| `libfirelite-0.8.18-windows.zip` | `firelite.dll`, `firelite-cli.exe`, `firelite-cloudserver.exe`, `benchmark.exe`, `sqlite_bench.exe` (no import lib — MinGW links the DLL directly, see `windows/README.md`) |
+| `libfirelite-0.8.18-linux.tar.gz` | `libfirelite.so`, `firelite-cli`, `firelite-cloudserver`, `benchmark`, `sqlite_bench` |
+| `libfirelite-0.8.18-android.tar.gz` | `jniLibs/arm64-v8a/libfirelite.so` |
 
 Extract the archive for your platform into the matching directory (`windows/`, `linux/`,
 or your app's `jniLibs/` for Android). Prior releases keep their own versioned assets.
 
-## Quick use
+## Usage
 
 ### C / C++ (Windows)
 
 ```c
 #include "firelite.h"
-// MinGW links the DLL directly (no import lib shipped): -Lwindows -lfirelite
-// MSVC is unsupported upstream — generate your own import lib if required.
+// MinGW links the DLL directly (no import lib shipped). MSVC is unsupported
+// upstream — generate your own import lib if required.
 FL_Engine* db = fl_engine_open("./data.firelite");
 FL_Doc* d = fl_doc_new();
 fl_doc_insert_str(d, "name", "alice");
@@ -77,13 +74,13 @@ fl_engine_free(db);
 ```
 
 ```bash
-# prerequisite: Windows release archive extracted into windows/
+# Windows release archive extracted into windows/
 g++ -O2 -Iinclude app.cpp -Lwindows -lfirelite -o app.exe
 ```
 
 ### CLI (Windows)
 
-Prerequisite: extract the Windows release archive into `windows/`:
+Extract the Windows release archive into `windows/`, then run commands against a database:
 
 ```bash
 windows\firelite-cli.exe --db .\demo.db seed users 100
@@ -92,8 +89,8 @@ windows\firelite-cli.exe --db .\demo.db get users/alice
 windows\firelite-cli.exe --db .\demo.db query users --where age:gte:21 --order name:asc --limit 10
 ```
 
-One-shot commands block briefly (≤30s) for background index recovery after open —
-queries issued first would otherwise silently degrade (cursor bounds ignored, pages repeat).
+One-shot commands wait (≤30s) for background index recovery after open.
+Queries issued first would otherwise silently degrade (cursor bounds ignored, pages repeat).
 
 ### Go
 
@@ -269,19 +266,44 @@ with `to_doc`. Blob fields never inflate inside views.
 | Typed view (lazy per-field pulls) | `fl_view_get`, `fl_view_get_int/float/bool/str/bytes`, `fl_view_to_doc`, `fl_cursor_walk_view` | `GetView`, `GetInt/Float/Bool/String/Bytes`, `HasField`, `ToDoc`, `CursorWalkView` | `viewDoc()`, `ViewDocSnapshot` | `TFireLite.GetView`, `TFLViewDoc`, `TFLQuery.WalkView` |
 
 ```c
-// byte-level walk: count rows, touch nothing owned
-int64_t n = fl_cursor_walk(db, q,_cb, &ctx);   // cb returns false to stop early
+// byte-level walk: count rows, touch nothing owned (false stops early)
+int64_t n = fl_cursor_walk(db, q, cb, &ctx);
 ```
 
 ```go
 n, _ := db.CursorWalk(q, func(id string, bytes []byte) bool { return true })
 ```
 
+Read-path guide (which shape for which workload): `docs/reads.md`.
+
 ## Benchmark
 
-`bench/benchmark.cpp` is the **official harness**: it drives the engine only through the public
-C ABI and reports throughput (ops/sec) per profile. `bench/sqlite_bench.cpp` is a **fair SQLite
-mirror**: same documents, same indexes, same loop counts, same math, same matrix columns.
+`bench/benchmark.cpp` drives the engine only through the public C ABI and reports
+throughput (ops/sec) per profile. `bench/sqlite_bench.cpp` is the matching SQLite
+mirror: same documents, indexes, loop counts, math and table columns.
+
+### Settling before measuring
+
+A freshly written database is not settled: index recovery, async index updates,
+blob persistence and periodic maintenance run in the background. Reads issued
+mid-flight measure contention (observed 1000x swings), so settle first:
+
+```c
+fl_engine_await_quiescent(db, 30000);  // true when settled (two consecutive clear samples)
+char* s = fl_engine_quiescence_status(db);  // JSON diagnostic, free with fl_string_free
+```
+
+`is_indexes_ready` covers stage one of four — enough for correct plans, not stable
+numbers. To hold checkpoint/compaction/purge/snapshots for flat bench rounds:
+
+```c
+fl_config_set_background_maintenance(cfg, false);  // default on; files grow until re-enabled
+```
+
+SDKs: Go `Config.SetBackgroundMaintenance`, Pascal config setter, JS
+`configSetBackgroundMaintenance` (both loaders).
+
+Full methodology, equal-work table and scoreboard: `docs/benchmarking.md`.
 
 ### What is measured
 
@@ -301,14 +323,15 @@ After the matrix, a **FULL SCAN** section (×5 iters over all live docs, 1:1 on 
 harnesses): decoded forward/reverse pages, byte/key-only scan (`fl_cursor_walk` vs
 id-column select), and the lazy stage (2-pull view walk vs narrow id/tenant/age
 select). `benchmark --gate` enforces the regression gate on median-of-3 Manual runs
-(`Qry>=0.85Cmp`, Off/Cur within 2×, `Get>5xQry`, `Batch>=Single` + smoke floors).
+(`Qry>=0.85Cmp`, Off/Cur within 2×, `Get>5xQry`, `Batch>=0.5Single` + smoke floors).
 
 ### Run (Windows, release binaries)
 
 ```bash
-# prerequisite: Windows release archive extracted into windows/
+# Windows release archive extracted into windows/
 cd windows
 .\benchmark.exe --docs=1000      # 6 FireLite profiles
+.\benchmark.exe --gate           # median-of-3 regression gate (Manual)
 .\sqlite_bench.exe --docs=1000   # 4 SQLite durability modes (default matrix)
 .\sqlite_bench.exe --docs=1000 --sync=FULL --journal=DELETE  # single custom mode
 ```
@@ -325,20 +348,22 @@ g++ -O2 -std=c++17 -o sqlite_bench.exe sqlite_bench.cpp -lsqlite3
 Linux/macOS equivalents use `-L../linux` / `-L../macos` and `-lfirelite`
 (`LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH` at runtime).
 
-### Fairness rules (read before comparing)
+### Fairness rules
 
-1. **Durability parity.** Default comparison is FireLite `Manual` profile vs
-   SQLite `Manual` mode (`synchronous=OFF` + `journal_mode=MEMORY`, both RAM-speed).
-   Row-to-row: `Always`↔`Always` (fsync every write), `Interval`↔`Interval`,
-   `OnCommit`↔`OnCommit`. For one combo only: `sqlite_bench --sync=FULL --journal=DELETE`.
-2. **Same `--docs`** (≥ 1000 for meaningful numbers) and same `--threads` on both sides.
-3. **Full-row decode on both sides** — every SQLite `SELECT` reads all columns,
+1. **Settle first.** Never measure against a freshly written database without
+   settling (`fl_engine_await_quiescent`) — see above and `docs/benchmarking.md`.
+2. **Durability parity.** Compare FireLite `Manual` against SQLite `Manual`
+   (`synchronous=OFF` + `journal_mode=MEMORY`, both RAM-speed). Row-to-row:
+   `Always`↔`Always` (fsync every write), `Interval`↔`Interval`, `OnCommit`↔`OnCommit`.
+   One combo only: `sqlite_bench --sync=FULL --journal=DELETE`.
+3. **Same `--docs`** (≥ 1000 for meaningful numbers) and same `--threads` on both sides.
+4. **Full-row decode on both sides** — every SQLite `SELECT` reads all columns,
    mirroring FireLite's full-document decode.
-4. **Same loop counts** — 300 iterations for queries, 15 000 stress gets, 50 transactions.
-5. `QryLazy` in the SQLite output is an **extra diagnostic** (id-column-only read),
-   not part of the fair comparison.
-6. SQLite modes run sequentially in one invocation, so later rows benefit from a warm
-   OS page cache. For strict isolation, run one custom mode at a time per bullet 1.
+5. **Same loop counts** — 300 iterations for queries, 15 000 stress gets, 50 transactions.
+6. `QryLazy` in the SQLite output is an **extra diagnostic** (id-column-only read),
+   not part of the comparison.
+7. SQLite modes run sequentially in one invocation, so later rows benefit from a warm
+   OS page cache. For strict isolation, run one custom mode at a time per rule 2.
 
 ### Comparison targets
 
@@ -357,7 +382,7 @@ Linux/macOS equivalents use `-L../linux` / `-L../macos` and `-lfirelite`
 
 ## Version
 
-This preview tracks engine **v0.8.13** (`VERSION`). Header, libraries, gateways and benchmarks
+This repo tracks engine **v0.8.18** (`VERSION`). Header, libraries, gateways and benchmarks
 are all taken from the same engine revision.
 
 ## License
@@ -366,7 +391,7 @@ This repository is distributed under the [libfirelite Binary Evaluation License]
 **all rights reserved**. You may use the prebuilt binaries, headers and SDK gateways to
 evaluate, benchmark (disclose version and settings when publishing results) and prototype
 with FireLite. Redistribution, production deployment and any commercial use beyond evaluation
-require a separate agreement. Open-source licensing is under consideration.
+require a separate agreement.
 
 Third-party attributions for the statically linked open-source dependencies:
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (all permissive licenses; no GPL/LGPL/AGPL code linked).

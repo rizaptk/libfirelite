@@ -66,6 +66,19 @@ FL_Engine *fl_engine_open(const char *path);
 
 bool fl_engine_is_indexes_ready(FL_Engine *engine);
 
+/// Block until background work settles (index recovery + async index
+/// updates + blob persistence + maintenance) or `timeout_ms` lapses.
+/// Requires two consecutive clear samples, so use it before measuring.
+/// Returns true when settled. See `FireLite::await_quiescent`.
+bool fl_engine_await_quiescent(FL_Engine *engine, uint64_t timeout_ms);
+
+/// Point-sample diagnostic as JSON (free with fl_string_free):
+/// {"indexes_ready":b,"pending_index_ops":n,"index_backfills":n,
+///  "pending_blob_bytes":n,"queued_blob_items":n,
+///  "maintenance_running":b,"quiescent":b}.
+/// Tells you WHAT is outstanding instead of guessing.
+char *fl_engine_quiescence_status(FL_Engine *engine);
+
 FL_Config *fl_config_new();
 
 void fl_config_free(FL_Config *config);
@@ -450,6 +463,11 @@ int32_t fl_query_where_in(FL_Query *query, const char *field, FL_Array *array);
 int32_t fl_engine_snapshot_indices(FL_Engine *engine);
 
 void fl_config_set_compression(FL_Config *config, bool enabled, int32_t level);
+
+/// Hold background maintenance (checkpoint/compaction/purge/snapshots) for
+/// deterministic benchmarks or hard latency bounds. Engine stays correct;
+/// files grow until re-enabled. Default on.
+void fl_config_set_background_maintenance(FL_Config *config, bool enabled);
 
 FL_NetSyncer *fl_net_syncer_new(FL_Engine *engine, const char *name, const char *room_key);
 
