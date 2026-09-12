@@ -2,9 +2,7 @@
 
 Prebuilt FireLite engine library, SDK gateways, CLI, sync hub, and benchmarks.
 
-> **License:** closed-source [evaluation license](LICENSE) — evaluation,
-> benchmarking and prototyping allowed; redistribution and production use
-> require permission.
+> **License:** closed-source [evaluation license](LICENSE) — read the terms before using.
 
 FireLite is an embedded, Firestore-style document database written in Rust.
 It stores typed JSON-like documents in binary form, runs fully in-process like
@@ -387,11 +385,11 @@ are all taken from the same engine revision.
 
 ## License
 
-This repository is distributed under the [libfirelite Binary Evaluation License](LICENSE) —
-**all rights reserved**. You may use the prebuilt binaries, headers and SDK gateways to
-evaluate, benchmark (disclose version and settings when publishing results) and prototype
-with FireLite. Redistribution, production deployment and any commercial use beyond evaluation
-require a separate agreement.
+[Binary Evaluation License](LICENSE) — all rights reserved. In practice:
+
+- OK: evaluating, benchmarking (mention version + settings when publishing numbers), prototyping.
+- Not OK: redistributing the binaries, running them in production, or any commercial
+  use beyond evaluation — that needs a separate agreement.
 
 Third-party attributions for the statically linked open-source dependencies:
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (all permissive licenses; no GPL/LGPL/AGPL code linked).
